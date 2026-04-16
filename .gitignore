@@ -1,0 +1,6 @@
+__pycache__
+.claude
+.venv
+.DS_Store
+frontend/dist
+frontend/node_modules

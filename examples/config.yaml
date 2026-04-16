@@ -1,0 +1,93 @@
+resource_attributes:
+  processors:
+    - resourcedetectionprocessor/system
+    - resourcedetectionprocessor/gcp
+    - k8s_attributes
+
+defaults:
+  resource_attributes:
+    resourcedetectionprocessor/system:
+      default_enabled: true
+      attributes:
+        - host.arch
+        - host.cpu.cache.l2.size
+        - host.cpu.family
+        - host.cpu.model.id
+        - host.cpu.model.name
+        - host.cpu.stepping
+        - host.cpu.vendor.id
+        - host.id
+        - host.name
+        - os.description
+        - os.type
+
+    resourcedetectionprocessor/gcp:
+      default_enabled: true
+      attributes:
+        - cloud.provider
+        - cloud.account.id
+        - cloud.platform
+        - cloud.region
+        - cloud.availability_zone
+
+    k8s_attributes:
+      default_enabled: false
+      attributes:
+        - k8s.cluster.name
+        - k8s.node.name
+        - k8s.namespace.name
+
+  receivers:
+    hostmetricsreceiver:
+      scrapers:
+        cpuscraper:
+          default_enabled: true
+          attributes:
+            cpu:
+              default_cardinality: 12   # number of logical CPUs
+            state:
+              default_cardinality: 4
+          resource_attributes:
+            default_cardinality: 1
+        diskscraper:
+          default_enabled: false
+          attributes:
+            device:
+              default_cardinality: 4
+          resource_attributes:
+            default_cardinality: 1
+        filesystemscraper:
+          default_enabled: false
+          attributes:
+            device:
+              default_cardinality: 4
+            mountpoint:
+              default_cardinality: 8
+            type:
+              default_cardinality: 3
+          resource_attributes:
+            default_cardinality: 1
+        networkscraper:
+          default_enabled: false
+          default_polling_interval: 60
+          attributes:
+            device:
+              default_cardinality: 4
+          resource_attributes:
+            default_cardinality: 1
+        nfsscraper:
+          default_enabled: false
+        pagingscraper:
+          default_enabled: false
+        processesscraper:
+          default_enabled: false
+        processscraper:
+          default_enabled: false
+          resource_attributes:
+            default_cardinality: 20
+        systemscraper:
+          default_enabled: false
+        loadscraper:
+          default_enabled: false
+        memoryscraper:
+          default_enabled: false
