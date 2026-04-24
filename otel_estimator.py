@@ -60,6 +60,28 @@ _SUMMARY_EXAMPLE = {
 # "client.address" or "server.client.address", while "address" matches any name
 # ending in "address".
 _ATTRIBUTE_PATTERNS: list[tuple[str, Any]] = [
+    # Exact / well-known cloud, host, k8s, and OS attributes (most specific — checked first)
+    ("cloud.account.id",        "elastic-sa"),
+    ("cloud.availability_zone", "us-central1-a"),
+    ("cloud.instance.id",       "8749923990868444902"),
+    ("cloud.platform",          "gcp_kubernetes_engine"),
+    ("cloud.provider",          "gcp"),
+    ("host.arch",               "amd64"),
+    ("host.cpu.cache.l2.size",  33792),
+    ("host.cpu.family",         "6"),
+    ("host.cpu.model.id",       "85"),
+    ("host.cpu.model.name",     "Intel(R) Xeon(R) CPU @ 2.80GHz"),
+    ("host.cpu.stepping",       "7"),
+    ("host.cpu.vendor.id",      "GenuineIntel"),
+    ("host.id",                 "8749923990868444902"),
+    ("host.ip",                 ["10.124.0.1"]),
+    ("host.mac",                ["02-42-C8-71-69-24"]),
+    ("host.name",               "tbekiares-metrics"),
+    ("k8s.cluster.name",        "tbekiares-superdemo"),
+    ("k8s.node.name",           "gke-tbekiares-superdemo-default-pool-54517e32-t569"),
+    ("os.description",          "Red Hat Enterprise Linux 9.7 (Plow) (Linux gke-tbekiares-superdemo-default-pool-54517e32-t569 6.12.55+ #1 SMP Sun Feb  1 08:53:53 UTC 2026 x86_64)"),
+    ("os.type",                 "linux"),
+
     # Network / addressing
     ("network.peer.address", "192.168.1.100"),
     ("network.peer.port",    5432),
@@ -86,7 +108,9 @@ _ATTRIBUTE_PATTERNS: list[tuple[str, Any]] = [
     ("db.system",            "postgresql"),
     ("db.name",              "mydb"),
     ("query.text",           "SELECT * FROM users WHERE id = ?"),
-    ("table",                "users"),
+    ("database.name",        "postgres"),
+    ("table.name",           "users"),
+    ("service.instance.id",  "postgresql-5695d8d846-wsn56:5432"),
     ("schema",               "public"),
     ("index",                "my-index"),
     ("namespace",            "default"),
@@ -107,7 +131,8 @@ _ATTRIBUTE_PATTERNS: list[tuple[str, Any]] = [
     ("pod",                  "my-pod-abc"),
     ("node",                 "node"),
     ("cluster",              "prod-cluster"),
-    ("host",                 "localhost"),
+    ("host.name",            "localhost"),
+    ("id",                   "8749923990868444902"),
     ("service",              "web-server"),
     # Cloud
     ("region",               "us-east"),
@@ -304,6 +329,8 @@ class ReceiverReport:
     description: str = ""
     display_name: str = ""
     metrics: list[str] = field(default_factory=list)
+    metric_descriptions: dict[str, str] = field(default_factory=dict)
+    metric_enabled_defaults: dict[str, bool] = field(default_factory=dict)
     attributes: list[dict[str, Any]] = field(default_factory=list)
     resource_attributes: list[dict[str, Any]] = field(default_factory=list)
     example_docs: list[dict[str, Any]] = field(default_factory=list)
@@ -315,6 +342,7 @@ def process_metadata(
     repo_root: Path,
     collector_version: str = "",
     processor_resource_attrs: dict[str, Any] | None = None,
+    metering_ignore_fields: frozenset[str] = frozenset(),
 ) -> ReceiverReport:
     """Parse one metadata.yaml and return a ReceiverReport."""
     rel = file_path.relative_to(repo_root)
@@ -405,9 +433,15 @@ def process_metadata(
     # the same set of attribute keys, and the same parent path segment
     # (i.e. everything in the metric name except the final component).
     metric_groups: dict[tuple, dict[str, Any]] = defaultdict(dict)
+    metric_descriptions: dict[str, str] = {}
+    metric_enabled_defaults: dict[str, bool] = {}
     for metric_name, metric_def in metrics_section.items():
         if not isinstance(metric_def, dict):
             continue
+        metric_descriptions[metric_name] = str(metric_def.get("description") or "").strip()
+        # Read the collector's own enabled field (absent → treat as True).
+        raw_enabled = metric_def.get("enabled")
+        metric_enabled_defaults[metric_name] = bool(raw_enabled) if raw_enabled is not None else True
         unit_val = str(metric_def.get("unit") or "")
         attr_keys: frozenset[str] = frozenset(metric_def.get("attributes") or [])
         parent_path = ".".join(metric_name.split(".")[:-1])
@@ -495,7 +529,7 @@ def process_metadata(
         if group_attributes:
             wrapped["attributes"] = group_attributes
 
-        sized = {k: v for k, v in wrapped.items() if k != "data_stream"}
+        sized = {k: v for k, v in wrapped.items() if k not in metering_ignore_fields}
         json_str = json.dumps(sized, separators=(",", ":"))
         total_json_bytes += len(json_str.encode("utf-8"))
         total_metered_bytes += _metered_bytes(sized)
@@ -512,6 +546,8 @@ def process_metadata(
         description=metadata_description,
         display_name=display_name,
         metrics=all_metrics,
+        metric_descriptions=metric_descriptions,
+        metric_enabled_defaults=metric_enabled_defaults,
         attributes=attributes,
         resource_attributes=resource_attributes_list,
         example_docs=example_docs,
@@ -521,6 +557,7 @@ def process_metadata(
 def run(
     repo_path: Path,
     processor_resource_attrs: dict[str, Any] | None = None,
+    metering_ignore_fields: frozenset[str] = frozenset(),
 ) -> list[ReceiverReport]:
     receiver_dir = repo_path / "receiver"
     if not receiver_dir.is_dir():
@@ -534,7 +571,8 @@ def run(
     print(f"Loading {len(metadata_files)} metadata.yaml file(s)...", end="", flush=True)
     reports = [
         process_metadata(f, repo_path, collector_version=collector_version,
-                         processor_resource_attrs=processor_resource_attrs)
+                         processor_resource_attrs=processor_resource_attrs,
+                         metering_ignore_fields=metering_ignore_fields)
         for f in metadata_files
     ]
     print(" done.")
@@ -602,6 +640,7 @@ def build_index(
                 continue
             yaml_scraper_cfg: dict = yaml_recv_scrapers.get(r.scraper) or {}
             yaml_attrs_cfg: dict = yaml_scraper_cfg.get("attributes") or {}
+            yaml_metrics_cfg: dict = yaml_scraper_cfg.get("metrics") or {}
 
             # Inject default_cardinality into each attribute dict.
             attributes_with_defaults = []
@@ -612,16 +651,27 @@ def build_index(
                     a["default_cardinality"] = int(yaml_card)
                 attributes_with_defaults.append(a)
 
-            yaml_ra_cfg: dict = yaml_scraper_cfg.get("resource_attributes") or {}
+            # Metrics are default-enabled unless explicitly turned off in metadata.yaml
+            # (enabled: false) or in the config (default_enabled: false).
+            metrics_with_defaults: list[dict[str, Any]] = []
+            for m in r.metrics:
+                m_cfg: dict = yaml_metrics_cfg.get(m) or {}
+                metadata_enabled = r.metric_enabled_defaults.get(m, True)
+                config_default_enabled = m_cfg.get("default_enabled")  # None if absent
+                default_enabled = metadata_enabled and config_default_enabled is not False
+                metrics_with_defaults.append({
+                    "name": m,
+                    "description": r.metric_descriptions.get(m, ""),
+                    "default_enabled": default_enabled,
+                })
+
             resource_attributes_obj: dict[str, Any] = {"attributes": r.resource_attributes}
-            if "default_cardinality" in yaml_ra_cfg:
-                resource_attributes_obj["default_cardinality"] = int(yaml_ra_cfg["default_cardinality"])
 
             scraper_entry: dict[str, Any] = {
                 "name": r.scraper,
                 "metadata_path": r.metadata_path,
                 "description": r.description,
-                "metrics": r.metrics,
+                "metrics": metrics_with_defaults,
                 "metric_count": r.metric_count,
                 "attributes": attributes_with_defaults,
                 "resource_attributes": resource_attributes_obj,
@@ -679,7 +729,7 @@ def _expand_docs(
     report: ReceiverReport,
     attributes: dict[str, int],
     include_resource_attrs: frozenset[str] | None = None,
-    resource_attributes_cardinality: int = 1,
+    include_metrics: frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the full set of attribute-expanded docs for a scraper.
 
@@ -693,10 +743,9 @@ def _expand_docs(
     present in this set are kept in each returned doc; all others are stripped.
     Pass ``None`` (the default) to include every resource attribute.
 
-    ``resource_attributes_cardinality`` — when > 1, each doc is further
-    multiplied by this factor: for every counter ``i`` in ``1..cardinality``,
-    a copy of the doc is emitted where every string value in
-    ``resource["attributes"]`` has ``-{i}`` appended.
+    ``include_metrics`` — when not None, only metric keys present in this set
+    are kept in each returned doc.  Docs whose entire metrics dict is filtered
+    out are skipped entirely.  Pass ``None`` to include every metric.
     """
     # Build enum-value lookup from the report's attribute metadata.
     enum_values: dict[str, list[Any]] = {
@@ -708,6 +757,13 @@ def _expand_docs(
     result: list[dict[str, Any]] = []
 
     for doc in report.example_docs:
+        # Filter metrics first; skip the doc entirely if none remain.
+        doc_metrics: dict[str, Any] = doc.get("metrics") or {}
+        if include_metrics is not None:
+            doc_metrics = {k: v for k, v in doc_metrics.items() if k in include_metrics}
+            if not doc_metrics:
+                continue
+
         attrs: dict[str, Any] = doc.get("attributes") or {}
 
         # Build one slot per attribute present in this doc.
@@ -734,6 +790,8 @@ def _expand_docs(
 
         for combo in combos:
             expanded = dict(doc)
+            if include_metrics is not None:
+                expanded["metrics"] = doc_metrics
             merged_attrs = {**attrs, **combo} if combo else attrs
             if merged_attrs:
                 expanded["attributes"] = merged_attrs
@@ -748,20 +806,7 @@ def _expand_docs(
                         if k in include_resource_attrs
                     },
                 }
-            if resource_attributes_cardinality > 1 and "resource" in expanded:
-                base_res_attrs = expanded["resource"].get("attributes", {})
-                for i in range(1, resource_attributes_cardinality + 1):
-                    copy = dict(expanded)
-                    copy["resource"] = {
-                        **expanded["resource"],
-                        "attributes": {
-                            k: f"{v}{i}" if isinstance(v, str) else v
-                            for k, v in base_res_attrs.items()
-                        },
-                    }
-                    result.append(copy)
-            else:
-                result.append(expanded)
+            result.append(expanded)
 
     return result
 
@@ -770,15 +815,16 @@ def _expand_dimensions_bytes(
     report: ReceiverReport,
     attributes: dict[str, int],
     include_resource_attrs: frozenset[str] | None = None,
-    resource_attributes_cardinality: int = 1,
+    include_metrics: frozenset[str] | None = None,
+    metering_ignore_fields: frozenset[str] = frozenset(),
 ) -> tuple[int, int, int]:
     """Compute (json_bytes, metered_bytes, doc_count) across all attribute-expanded docs."""
     total_json = 0
     total_metered = 0
     doc_count = 0
 
-    for doc in _expand_docs(report, attributes, include_resource_attrs, resource_attributes_cardinality):
-        sized = {k: v for k, v in doc.items() if k != "data_stream"}
+    for doc in _expand_docs(report, attributes, include_resource_attrs, include_metrics):
+        sized = {k: v for k, v in doc.items() if k not in metering_ignore_fields}
         total_json += len(json.dumps(sized, separators=(",", ":")).encode())
         total_metered += _metered_bytes(sized)
         doc_count += 1
@@ -821,6 +867,8 @@ def create_app(
     reports: list[ReceiverReport],
     config_defaults: dict | None = None,
     processor_attrs: dict[str, dict[str, Any]] | None = None,
+    metering_ignore_fields: frozenset[str] = frozenset(),
+    simple_templates: list | None = None,
 ) -> Any:
     try:
         from flask import Flask, jsonify, request
@@ -835,7 +883,7 @@ def create_app(
         static_url_path="",
     )
     cfg_receivers: dict = (config_defaults or {}).get("receivers") or {}
-    cfg_resource_attributes: dict = (config_defaults or {}).get("resource_attributes") or {}
+    cfg_resource_attributes: dict = ((config_defaults or {}).get("resource_attributes") or {}).get("processors") or {}
 
     index = build_index(reports, config_defaults=cfg_receivers)
 
@@ -858,7 +906,7 @@ def create_app(
         """Build one catalog entry from scanned resource attrs, annotating with
         default_enabled values from the config.
 
-        ``defaults.resource_attributes.<processor>.attributes`` is a list of
+        ``defaults.resource_attributes.processors.<processor>.attributes`` is a list of
         attribute names that are enabled by default.  Any attribute present in
         the list gets ``default_enabled: true``; any attribute absent from the
         list gets ``default_enabled: false``.  When the list is absent from the
@@ -893,10 +941,13 @@ def create_app(
 
     @app.get("/receivers")
     def get_receivers():
-        return jsonify({
+        resp: dict[str, Any] = {
             "receivers": index,
             "resource_attributes": _resource_attributes_catalog,
-        })
+        }
+        if simple_templates:
+            resp["templates"] = simple_templates
+        return jsonify(resp)
 
     @app.post("/estimate")
     def post_estimate():
@@ -919,12 +970,14 @@ def create_app(
         total_metered_gb = 0.0
         total_time_series = 0
         total_data_points_per_day = 0.0
+        total_raw_metered_bytes = 0
 
         for recv_req in requested_receivers:
             recv_name = recv_req.get("name")
             if not recv_name:
                 return jsonify({"error": "each receiver entry must have a 'name'"}), 400
 
+            recv_purpose: str = (recv_req.get("purpose") or "").strip()
             instances = int(recv_req.get("instances", 1))
             if instances < 1:
                 return jsonify({"error": f"'instances' must be >= 1 (receiver: {recv_name})"}), 400
@@ -935,7 +988,8 @@ def create_app(
             # Build per-scraper values from request
             scraper_polling: dict[str, int | None] = {}
             scraper_attributes: dict[str, dict[str, int]] = {}
-            scraper_ra_cardinality: dict[str, int] = {}
+            scraper_ra_include: dict[str, frozenset[str]] = {}
+            scraper_metrics_include: dict[str, frozenset[str]] = {}
             for m in requested_scrapers:
                 scraper_name = m.get("name")
                 if scraper_name:
@@ -943,14 +997,18 @@ def create_app(
                     if "attributes" in m:
                         scraper_attributes[scraper_name] = _parse_attributes(m["attributes"])
                     ra_cfg = m.get("resource_attributes")
-                    if isinstance(ra_cfg, dict) and "cardinality" in ra_cfg:
-                        scraper_ra_cardinality[scraper_name] = int(ra_cfg["cardinality"])
+                    if isinstance(ra_cfg, list):
+                        scraper_ra_include[scraper_name] = frozenset(ra_cfg)
+                    metrics_cfg = m.get("metrics")
+                    if isinstance(metrics_cfg, list):
+                        scraper_metrics_include[scraper_name] = frozenset(metrics_cfg)
 
             result_scrapers = []
             recv_json_gb = 0.0
             recv_metered_gb = 0.0
             recv_time_series = 0
             recv_data_points_per_day = 0.0
+            recv_raw_metered_bytes = 0
 
             for scraper_name in scraper_names:
                 report = report_lookup.get((recv_name, scraper_name))
@@ -966,9 +1024,26 @@ def create_app(
 
                 effective_attrs: dict[str, int] = scraper_attributes.get(scraper_name) or {}
 
-                ra_cardinality = scraper_ra_cardinality.get(scraper_name, 1)
+                # Build per-scraper effective resource-attribute include set:
+                # union of the global processor attrs (if any) and the selected
+                # scraper-level attrs (if specified; absent = include all).
+                scraper_ra_incl = scraper_ra_include.get(scraper_name)
+                if include_resource_attrs is None and scraper_ra_incl is None:
+                    effective_include: frozenset[str] | None = None
+                elif include_resource_attrs is None:
+                    effective_include = scraper_ra_incl
+                elif scraper_ra_incl is None:
+                    all_ra_names = frozenset(a["name"] for a in report.resource_attributes)
+                    effective_include = include_resource_attrs | all_ra_names
+                else:
+                    effective_include = include_resource_attrs | scraper_ra_incl
+
+                include_metrics: frozenset[str] | None = scraper_metrics_include.get(scraper_name)
+
                 expanded_json_bytes, expanded_metered_bytes, docs_per_scrape = _expand_dimensions_bytes(
-                    report, effective_attrs, include_resource_attrs, ra_cardinality
+                    report, effective_attrs, effective_include,
+                    include_metrics=include_metrics,
+                    metering_ignore_fields=metering_ignore_fields,
                 )
 
                 scraper_json_gb = _gb_per_day(expanded_json_bytes, polling, instances)
@@ -978,8 +1053,10 @@ def create_app(
                 recv_metered_gb += scraper_metered_gb
                 recv_time_series += docs_per_scrape
                 recv_data_points_per_day += scraper_data_points_per_day
+                recv_raw_metered_bytes += expanded_metered_bytes
 
                 ra_names = [a["name"] for a in report.resource_attributes if "name" in a]
+                scraper_bytes_per_series = round(expanded_metered_bytes / docs_per_scrape) if docs_per_scrape > 0 else 0
                 scraper_entry: dict[str, Any] = {
                     "name": scraper_name,
                     "polling_interval_s": polling,
@@ -987,37 +1064,46 @@ def create_app(
                     "data_points_per_day": round(scraper_data_points_per_day),
                     "json_gb_per_day": round(scraper_json_gb, 6),
                     "metered_gb_per_day": round(scraper_metered_gb, 6),
+                    "bytes_per_series": scraper_bytes_per_series,
                 }
                 if ra_names:
                     scraper_entry["resource_attributes"] = ra_names
                 if include_docs:
-                    scraper_entry["docs"] = _expand_docs(report, effective_attrs, include_resource_attrs, ra_cardinality)
+                    scraper_entry["time_series_docs"] = _expand_docs(report, effective_attrs, effective_include, include_metrics)
                 result_scrapers.append(scraper_entry)
 
             recv_time_series_total = recv_time_series * instances
             recv_data_points_per_day_total = recv_data_points_per_day * instances
+            recv_bytes_per_series = round(recv_raw_metered_bytes / recv_time_series) if recv_time_series > 0 else 0
 
             total_json_gb += recv_json_gb
             total_metered_gb += recv_metered_gb
             total_time_series += recv_time_series_total
             total_data_points_per_day += recv_data_points_per_day_total
+            total_raw_metered_bytes += recv_raw_metered_bytes * instances
 
-            result_receivers.append({
+            recv_entry: dict[str, Any] = {
                 "name": recv_name,
                 "instances": instances,
                 "time_series": recv_time_series_total,
                 "data_points_per_day": round(recv_data_points_per_day_total),
                 "json_gb_per_day": round(recv_json_gb, 6),
                 "metered_gb_per_day": round(recv_metered_gb, 6),
+                "bytes_per_series": recv_bytes_per_series,
                 "scrapers": result_scrapers,
-            })
+            }
+            if recv_purpose:
+                recv_entry["purpose"] = recv_purpose
+            result_receivers.append(recv_entry)
 
+        total_bytes_per_series = round(total_raw_metered_bytes / total_time_series) if total_time_series > 0 else 0
         return jsonify({
             "receivers": result_receivers,
             "total_time_series": total_time_series,
             "total_data_points_per_day": round(total_data_points_per_day),
             "total_json_gb_per_day": round(total_json_gb, 6),
             "total_metered_gb_per_day": round(total_metered_gb, 6),
+            "total_bytes_per_series": total_bytes_per_series,
         })
 
     return app
@@ -1061,6 +1147,9 @@ def main() -> None:
 
     config_defaults: dict = full_config.get("defaults") or {}
     processor_names: list[str] = (full_config.get("resource_attributes") or {}).get("processors") or []
+    metering_ignore_fields: frozenset[str] = frozenset(
+        (full_config.get("metering") or {}).get("ignore_fields") or []
+    )
 
     processor_attrs = scan_processor_resource_attrs(args.repo_path, processor_names)
     # Flatten all scanned attrs into a single dict for doc generation (later processors win on key conflicts).
@@ -1068,8 +1157,12 @@ def main() -> None:
     for data in processor_attrs.values():
         merged_processor_resource_attrs.update(data["attrs"])
 
-    reports = run(args.repo_path, processor_resource_attrs=merged_processor_resource_attrs)
-    app = create_app(reports, config_defaults=config_defaults, processor_attrs=processor_attrs)
+    simple_templates: list = full_config.get("templates") or []
+
+    reports = run(args.repo_path, processor_resource_attrs=merged_processor_resource_attrs,
+                  metering_ignore_fields=metering_ignore_fields)
+    app = create_app(reports, config_defaults=config_defaults, processor_attrs=processor_attrs,
+                     metering_ignore_fields=metering_ignore_fields, simple_templates=simple_templates)
     print(f"Starting server on http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port)
 

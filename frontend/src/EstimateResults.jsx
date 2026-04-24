@@ -7,6 +7,13 @@ function fmt(gb) {
   return (gb * 1e6).toFixed(1) + ' KB'
 }
 
+function fmtBytes(n) {
+  if (n === null || n === undefined) return '—'
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + ' MB'
+  if (n >= 1_000)     return (n / 1_000).toFixed(1) + ' KB'
+  return Math.round(n) + ' B'
+}
+
 function fmtDocs(n) {
   if (n === null || n === undefined) return '—'
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(2) + 'M'
@@ -66,7 +73,7 @@ function DocRow({ doc, index, scraperResourceAttrs }) {
 
 function ScraperResultRow({ scraper }) {
   const [docsExpanded, setDocsExpanded] = useState(false)
-  const docs = scraper.docs || []
+  const docs = scraper.time_series_docs || []
   const hasDocs = docs.length > 0
 
   return (
@@ -87,12 +94,13 @@ function ScraperResultRow({ scraper }) {
         <td className="res-num">{fmtDocs(scraper.data_points_per_day)}</td>
         <td className="res-num">{fmt(scraper.json_gb_per_day)}</td>
         <td className="res-num">{fmt(scraper.metered_gb_per_day)}</td>
+        <td className="res-num">{fmtBytes(scraper.bytes_per_series)}</td>
       </tr>
       {docsExpanded && hasDocs && (
         <tr className="scraper-docs-row">
-          <td colSpan={7}>
+          <td colSpan={8}>
             <div className="docs-panel">
-              <div className="docs-panel-title">docs ({docs.length})</div>
+              <div className="docs-panel-title">Time Series ({docs.length})</div>
               <div className="docs-list">
                 {docs.map((doc, i) => (
                   <DocRow key={i} doc={doc} index={i} scraperResourceAttrs={scraper.resource_attributes} />
@@ -122,18 +130,32 @@ function ReceiverResultRow({ receiver }) {
             >▶</button>
           )}
         </td>
-        <td className="res-recv-name">{receiver.name}</td>
+        <td className="res-recv-name">
+          {receiver.name}
+          {receiver.purpose && <span className="res-recv-purpose">{receiver.purpose}</span>}
+        </td>
         <td className="res-num">{receiver.instances ?? 1}</td>
         <td className="res-num">{fmtDocs(receiver.time_series)}</td>
         <td className="res-num">{fmtDocs(receiver.data_points_per_day)}</td>
         <td className="res-num">{fmt(receiver.json_gb_per_day)}</td>
         <td className="res-num res-highlight">{fmt(receiver.metered_gb_per_day)}</td>
+        <td className="res-num">{fmtBytes(receiver.bytes_per_series)}</td>
       </tr>
       {expanded && hasScrapers && (
         <tr className="res-scraper-detail-row">
-          <td colSpan={7}>
+          <td colSpan={8}>
             <div className="res-scraper-detail">
               <table className="res-scraper-table">
+                <colgroup>
+                  <col className="res-col-chevron" />
+                  <col className="res-col-name" />
+                  <col className="res-col-instances" />
+                  <col className="res-col-ts" />
+                  <col className="res-col-dp" />
+                  <col className="res-col-json" />
+                  <col className="res-col-metered" />
+                  <col className="res-col-bps" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th className="res-chevron-cell" />
@@ -143,6 +165,7 @@ function ReceiverResultRow({ receiver }) {
                     <th className="res-num">Data Points / day</th>
                     <th className="res-num">JSON GB/day</th>
                     <th className="res-num">Metered GB/day</th>
+                    <th className="res-num">Bytes/Series</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -196,6 +219,11 @@ export default function EstimateResults({ results, onBack }) {
             <div className="res-card-unit">per day</div>
           </div>
           <div className="res-card">
+            <div className="res-card-label">Bytes / Series</div>
+            <div className="res-card-value">{fmtBytes(results.total_bytes_per_series)}</div>
+            <div className="res-card-unit">avg metered</div>
+          </div>
+          <div className="res-card">
             <div className="res-card-label">Receivers</div>
             <div className="res-card-value">{sorted.length}</div>
             <div className="res-card-unit">configured</div>
@@ -204,6 +232,16 @@ export default function EstimateResults({ results, onBack }) {
 
         {/* Per-receiver table */}
         <table className="res-recv-table">
+          <colgroup>
+            <col className="res-col-chevron" />
+            <col className="res-col-name" />
+            <col className="res-col-instances" />
+            <col className="res-col-ts" />
+            <col className="res-col-dp" />
+            <col className="res-col-json" />
+            <col className="res-col-metered" />
+            <col className="res-col-bps" />
+          </colgroup>
           <thead>
             <tr>
               <th className="res-chevron-cell" />
@@ -213,6 +251,7 @@ export default function EstimateResults({ results, onBack }) {
               <th className="res-num">Data Points / day</th>
               <th className="res-num">JSON GB / day</th>
               <th className="res-num">Metered GB / day</th>
+              <th className="res-num">Bytes / Series</th>
             </tr>
           </thead>
           <tbody>

@@ -4,90 +4,191 @@ resource_attributes:
     - resourcedetectionprocessor/gcp
     - k8s_attributes
 
+metering:
+  ignore_fields:
+    - data_stream
+
+templates:
+  - environments:
+    - name: Host
+      processor: resourcedetectionprocessor/system
+      enabled: false
+    - name: Cloud
+      processor: resourcedetectionprocessor/gcp
+    - name: Kubernetes
+      processor: k8s_attributes
+  - sources:
+    - name: Hosts
+      receivers:
+        - name: hostmetricsreceiver
+      inputs:
+        - label: "Total number of hosts"
+          map: hostmetricsreceiver/quantity
+    - name: databases
+      receivers:
+        - name: hostmetricsreceiver
+      inputs:
+        - label: "Total number of database tables"
+          map: postgresqlreceiver/quantity
+
+
 defaults:
   resource_attributes:
-    resourcedetectionprocessor/system:
-      default_enabled: true
-      attributes:
-        - host.arch
-        - host.cpu.cache.l2.size
-        - host.cpu.family
-        - host.cpu.model.id
-        - host.cpu.model.name
-        - host.cpu.stepping
-        - host.cpu.vendor.id
-        - host.id
-        - host.name
-        - os.description
-        - os.type
+    processors:
+      resourcedetectionprocessor/system:
+        default_enabled: true
+        attributes:
+          - host.arch
+          - host.cpu.cache.l2.size
+          - host.cpu.family
+          - host.cpu.model.id
+          - host.cpu.model.name
+          - host.cpu.stepping
+          - host.cpu.vendor.id
+          - host.id
+          - host.name
+          - os.description
+          - os.type
 
-    resourcedetectionprocessor/gcp:
-      default_enabled: true
-      attributes:
-        - cloud.provider
-        - cloud.account.id
-        - cloud.platform
-        - cloud.region
-        - cloud.availability_zone
+      resourcedetectionprocessor/gcp:
+        default_enabled: true
+        attributes:
+          - cloud.provider
+          - cloud.account.id
+          - cloud.platform
+          - cloud.region
+          - cloud.availability_zone
 
-    k8s_attributes:
-      default_enabled: false
-      attributes:
-        - k8s.cluster.name
-        - k8s.node.name
-        - k8s.namespace.name
+      k8s_attributes:
+        default_enabled: false
+        attributes:
+          - k8s.cluster.name
+          - k8s.node.name
+          - k8s.namespace.name
 
   receivers:
+    postgresqlreceiver:
+      scrapers:
+        postgresqlreceiver:
+          default_polling_interval: 10
+          default_enabled: true
+          attributes:
+            source:
+              default_cardinality: 12
+            type:
+              default_cardinality: 4
+            relation:
+              default_cardinality: 5
+          metrics:
+            postgresql.blks_hit:
+              default_enabled: true
+            postgresql.blks_read:
+              default_enabled: true
+            postgresql.database.locks:
+              default_enabled: true
+            postgresql.deadlocks:
+              default_enabled: true
+            postgresql.sequential_scans:
+              default_enabled: true
+            postgresql.temp_files:
+              default_enabled: true
+            postgresql.temp.io:
+              default_enabled: true
+            postgresql.tup_deleted:
+              default_enabled: true
+            postgresql.tup_fetched:
+              default_enabled: true
+            postgresql.tup_inserted:
+              default_enabled: true
+            postgresql.tup_returned:
+              default_enabled: true
+            postgresql.tup_updated:
+              default_enabled: true
+            postgresql.wal.delay:
+              default_enabled: true
+            postgresql.function.calls:
+              default_enabled: true
+
     hostmetricsreceiver:
       scrapers:
         cpuscraper:
           default_enabled: true
           attributes:
             cpu:
-              default_cardinality: 12   # number of logical CPUs
-            state:
-              default_cardinality: 4
-          resource_attributes:
-            default_cardinality: 1
+              default_cardinality: 2   # number of logical CPUs
+          metrics:
+            system.cpu.utilization:
+              default_enabled: true
+            system.cpu.logical.count:
+              default_enabled: true
         diskscraper:
-          default_enabled: false
+          default_enabled: true
           attributes:
             device:
-              default_cardinality: 4
-          resource_attributes:
-            default_cardinality: 1
+              default_cardinality: 2
         filesystemscraper:
-          default_enabled: false
+          default_enabled: true
           attributes:
             device:
-              default_cardinality: 4
+              default_cardinality: 2
             mountpoint:
-              default_cardinality: 8
+              default_cardinality: 2
             type:
-              default_cardinality: 3
-          resource_attributes:
-            default_cardinality: 1
+              default_cardinality: 2
+          metrics:
+            system.filesystem.inodes.usage:
+              default_enabled: true
+            system.filesystem.usage:
+              default_enabled: true   
         networkscraper:
-          default_enabled: false
-          default_polling_interval: 60
+          default_enabled: true
           attributes:
             device:
-              default_cardinality: 4
-          resource_attributes:
-            default_cardinality: 1
+              default_cardinality: 2
+            state:
+              default_cardinality: 13
+          metrics:
+            system.network.connections:
+              default_enabled: true
+            system.network.dropped:
+              default_enabled: true
+            system.network.packets:
+              default_enabled: true
+            system.network.errors:
+              default_enabled: true
+            system.network.io:
+              default_enabled: true
         nfsscraper:
           default_enabled: false
         pagingscraper:
           default_enabled: false
         processesscraper:
-          default_enabled: false
+          default_enabled: true
+          attributes:
+            status:
+              default_cardinality: 4
         processscraper:
           default_enabled: false
-          resource_attributes:
-            default_cardinality: 20
+          metrics:
+            process.threads:
+              default_enabled: true
+            process.open_file_descriptors:
+              default_enabled: true
+            process.memory.utilization:
+              default_enabled: true
+            process.disk.operations:
+              default_enabled: true
         systemscraper:
           default_enabled: false
         loadscraper:
-          default_enabled: false
+          default_enabled: true
         memoryscraper:
-          default_enabled: false
+          default_enabled: true
+          attributes:
+            state:
+              default_cardinality: 6
+          metrics:
+            system.memory.usage:
+              default_enabled: true
+            system.memory.utilization:
+              default_enabled: true
